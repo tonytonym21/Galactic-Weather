@@ -132,6 +132,11 @@ header{display:flex;align-items:center;gap:10px;margin-bottom:18px}
 .panel .lbl::before{content:"";width:14px;height:1px;background:var(--holo)}
 .panel p{margin:0;line-height:1.55;font-size:14.5px}
 .panel.joke p{color:#ffe7c2}
+.hourly{margin-top:2px}
+.hourly svg{width:100%;height:auto;display:block;overflow:visible}
+.hourly .ht{fill:var(--amber);font-family:"Chakra Petch",sans-serif;font-weight:700;font-size:13px}
+.hourly .hx{fill:var(--muted);font-family:"Space Mono",monospace;font-size:11px}
+.nohr{font-family:"Space Mono";font-size:12px;color:var(--muted);padding:14px 2px}
 
 /* forecast strip */
 .fc{display:grid;grid-template-columns:repeat(7,1fr);gap:6px;margin-top:12px}
@@ -213,6 +218,7 @@ header{display:flex;align-items:center;gap:10px;margin-bottom:18px}
       </div>
     </div>
 
+    <div class="panel"><div class="lbl">Hourly &middot; <span id="hourlyDay">Today</span></div><div class="hourly" id="hourlyWrap"></div></div>
     <div class="panel"><div class="lbl">Holonet file</div><p id="fact"></p></div>
     <div class="panel joke"><div class="lbl">Cantina joke</div><p id="joke"></p></div>
 
@@ -322,14 +328,22 @@ let activeForecast=null;
 
 function fmt(n,d=0){return (n===null||n===undefined||isNaN(n))?"\u2013":Number(n).toFixed(d);}
 
+// Single source of truth for what conditions a given day is matched on.
+// Today (i===0) uses live "right now" data; future days use the daily summary.
+function condForDay(i){
+  const f=activeForecast, d=f.daily;
+  if(i===0){
+    return {code:f.current.code,temp:f.current.temp,wind:f.current.wind,
+            precip:f.current.precip,humidity:f.current.humidity};
+  }
+  return {code:d.code[i],temp:Math.round((d.tmax[i]+d.tmin[i])/2),
+          wind:d.wind[i],precip:d.precip[i],humidity:60};
+}
+
 function renderDay(i){
   const f=activeForecast; if(!f) return;
   const d=f.daily, isToday=(i===0);
-  const code=isToday?f.current.code:d.code[i];
-  const temp=isToday?f.current.temp:Math.round((d.tmax[i]+d.tmin[i])/2);
-  const c={code, temp, wind:isToday?f.current.wind:d.wind[i],
-           precip:isToday?f.current.precip:d.precip[i],
-           humidity:isToday?f.current.humidity:60};
+  const c=condForDay(i);
   const key=matchPlanet(c), P=PLANETS[key];
   document.documentElement.style.setProperty("--p1",P.p[0]);
   document.documentElement.style.setProperty("--p2",P.p[1]);
@@ -340,8 +354,8 @@ function renderDay(i){
   $("pclim").textContent=P.clim;
   $("fact").textContent=P.fact;
   $("joke").textContent=P.joke;
-  $("condtext").textContent=(WMO[code]||"Unknown")+(isToday?" \u00b7 right now":" \u00b7 daytime");
-  $("s_temp").innerHTML=fmt(temp)+'<small>&deg;C</small>';
+  $("condtext").textContent=(WMO[c.code]||"Unknown")+(isToday?" \u00b7 right now":" \u00b7 daytime");
+  $("s_temp").innerHTML=fmt(c.temp)+'<small>&deg;C</small>';
   if(isToday){
     $("s_feels").innerHTML=fmt(f.current.feels)+'<small>&deg;C</small>';
     $("s_wind").innerHTML=fmt(f.current.wind)+'<small> km/h</small>';
@@ -351,7 +365,53 @@ function renderDay(i){
     $("s_wind").innerHTML=fmt(d.wind[i])+'<small> km/h</small>';
     $("s_prec").innerHTML=fmt(d.precip[i],1)+'<small> mm</small>';
   }
+  const lbl=isToday?"Today":new Date(d.time[i]+"T12:00").toLocaleDateString(undefined,{weekday:"long"});
+  $("hourlyDay").textContent=lbl;
+  renderHourly(i);
   document.querySelectorAll(".day").forEach((el,idx)=>el.classList.toggle("active",idx===i));
+}
+
+// Hourly temperature curve for the selected day
+function renderHourly(i){
+  const f=activeForecast, h=f.hourly, dayStr=f.daily.time[i];
+  const idx=[];
+  for(let k=0;k<h.time.length;k++){ if(h.time[k].slice(0,10)===dayStr) idx.push(k); }
+  if(!idx.length){ $("hourlyWrap").innerHTML='<div class="nohr">No hourly data.</div>'; return; }
+  const temps=idx.map(k=>Math.round(h.temp[k]));
+  const hrs=idx.map(k=>parseInt(h.time[k].slice(11,13),10));
+  const W=700,H=158,padL=10,padR=10,padT=26,padB=22;
+  const iW=W-padL-padR, iH=H-padT-padB, n=temps.length;
+  const tmin=Math.min(...temps), tmax=Math.max(...temps), range=Math.max(1,tmax-tmin);
+  const X=k=>padL+(n<=1?iW/2:(k/(n-1))*iW);
+  const Y=t=>padT+(1-(t-tmin)/range)*iH;
+  let line="";
+  idx.forEach((_,k)=>{ const x=X(k).toFixed(1), y=Y(temps[k]).toFixed(1);
+    line+=(k===0?"M":"L")+x+","+y+" "; });
+  const area="M"+X(0).toFixed(1)+","+(padT+iH)+" "+line.replace(/^M/,"L")+"L"+X(n-1).toFixed(1)+","+(padT+iH)+" Z";
+  let nowMark="";
+  if(i===0 && f.current.time){
+    const nh=parseInt(f.current.time.slice(11,13),10);
+    let pos=hrs.indexOf(nh); if(pos<0) pos=0;
+    const x=X(pos);
+    nowMark='<line x1="'+x+'" y1="'+padT+'" x2="'+x+'" y2="'+(padT+iH)+'" stroke="var(--amber)" stroke-width="1" stroke-dasharray="3 3" opacity=".7"/>'
+      +'<circle cx="'+x+'" cy="'+Y(temps[pos])+'" r="4" fill="var(--amber)"/>';
+  }
+  let dots="", xlabels="", tlabels="";
+  idx.forEach((_,k)=>{
+    if(k%3===0 || k===n-1){
+      const x=X(k), y=Y(temps[k]);
+      dots+='<circle cx="'+x.toFixed(1)+'" cy="'+y.toFixed(1)+'" r="2.4" fill="var(--holo)"/>';
+      tlabels+='<text x="'+x.toFixed(1)+'" y="'+(y-8).toFixed(1)+'" text-anchor="middle" class="ht">'+temps[k]+'&deg;</text>';
+      xlabels+='<text x="'+x.toFixed(1)+'" y="'+(H-6)+'" text-anchor="middle" class="hx">'+String(hrs[k]).padStart(2,"0")+'</text>';
+    }
+  });
+  $("hourlyWrap").innerHTML='<svg viewBox="0 0 '+W+' '+H+'" xmlns="http://www.w3.org/2000/svg">'
+    +'<defs><linearGradient id="hg" x1="0" y1="0" x2="0" y2="1">'
+    +'<stop offset="0%" stop-color="var(--holo)" stop-opacity=".30"/>'
+    +'<stop offset="100%" stop-color="var(--holo)" stop-opacity="0"/></linearGradient></defs>'
+    +'<path d="'+area+'" fill="url(#hg)"/>'
+    +'<path d="'+line.trim()+'" fill="none" stroke="var(--holo)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>'
+    +nowMark+dots+tlabels+xlabels+'</svg>';
 }
 
 function renderForecast(loc,data){
@@ -359,9 +419,11 @@ function renderForecast(loc,data){
   activeForecast={
     current:{temp:Math.round(cur.temperature_2m),feels:Math.round(cur.apparent_temperature),
       wind:Math.round(cur.wind_speed_10m),precip:cur.precipitation,
-      humidity:Math.round(cur.relative_humidity_2m),code:cur.weather_code},
+      humidity:Math.round(cur.relative_humidity_2m),code:cur.weather_code,time:cur.time},
     daily:{code:day.weather_code,tmax:day.temperature_2m_max,tmin:day.temperature_2m_min,
-      precip:day.precipitation_sum,wind:day.wind_speed_10m_max,time:day.time}
+      precip:day.precipitation_sum,wind:day.wind_speed_10m_max,time:day.time},
+    hourly:{time:data.hourly.time,temp:data.hourly.temperature_2m,
+      code:data.hourly.weather_code,pop:data.hourly.precipitation_probability}
   };
   $("locname").textContent=loc.name+(loc.country?", "+loc.country:"");
   const dt=new Date();
@@ -369,9 +431,7 @@ function renderForecast(loc,data){
   // forecast strip
   const fc=$("fc"); fc.innerHTML="";
   for(let i=0;i<Math.min(7,day.time.length);i++){
-    const c={code:day.weather_code[i],temp:Math.round((day.temperature_2m_max[i]+day.temperature_2m_min[i])/2),
-      wind:day.wind_speed_10m_max[i],precip:day.precipitation_sum[i],humidity:60};
-    const P=PLANETS[matchPlanet(c)];
+    const P=PLANETS[matchPlanet(condForDay(i))];
     const wd=new Date(day.time[i]+"T12:00").toLocaleDateString(undefined,{weekday:"short"});
     const el=document.createElement("div");
     el.className="day"; el.style.setProperty("--dc",P.glow);
@@ -397,6 +457,7 @@ async function geocode(name){
 async function getForecast(loc){
   const u="https://api.open-meteo.com/v1/forecast?latitude="+loc.latitude+"&longitude="+loc.longitude
     +"&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,precipitation"
+    +"&hourly=temperature_2m,weather_code,precipitation_probability"
     +"&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,wind_speed_10m_max"
     +"&timezone=auto&forecast_days=7&wind_speed_unit=kmh";
   const r=await fetch(u); if(!r.ok) throw new Error("forecast "+r.status);
