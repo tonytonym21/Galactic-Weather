@@ -638,6 +638,9 @@ const Radar=(function(){
   return {init,focus};
 })();
 
+function setMsg(t,err){const m=$("msg");m.textContent=t||"";m.className="msg"+(err?" err":"");}
+function loading(on){$("loader").classList.toggle("show",on);}
+
 async function geocode(name){
   const u="https://geocoding-api.open-meteo.com/v1/search?name="+encodeURIComponent(name)+"&count=8&language=en&format=json";
   const r=await fetch(u); if(!r.ok) throw new Error("geocode "+r.status);
